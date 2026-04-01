@@ -12,14 +12,18 @@ brew install urirun
 ## 使い方
 
 ```bash
-# キーを指定して実行
+# setting.yaml のキーを実行
 urirun <key>
+
+# settings/<prefix>-setting.yaml のキーを実行
+urirun <prefix>-<key>
 
 # 利用可能なキー一覧
 urirun --list
 
 # 設定ファイルを編集
-urirun --edit
+urirun --edit            # setting.yaml を編集
+urirun --edit <prefix>   # settings/<prefix>-setting.yaml を編集
 
 # バージョン表示
 urirun --version
@@ -29,7 +33,17 @@ urirun --version
 
 初回は `urirun --edit` で設定ファイルを作成してください。
 
-場所: `~/.config/urirun/urirun.yaml`
+```
+~/.config/uribow-lab/urirun/
+  setting.yaml                  # メイン設定
+  settings/
+    <prefix>-setting.yaml       # 追加設定（プレフィックス付きで呼び出し）
+```
+
+### キー解決の仕組み
+
+1. `urirun github` → `setting.yaml` の `github` キーを検索
+2. `urirun some-github` → まず `setting.yaml` の `some-github` を検索、なければ `settings/some-setting.yaml` の `github` を検索
 
 ### 対応type
 
@@ -43,6 +57,7 @@ urirun --version
 ### 設定例
 
 ```yaml
+# setting.yaml
 github:
   type: chrome
   profile: user@example.com
@@ -56,14 +71,19 @@ code:
   type: vscode
   path: /path/to/project
 
-code-ws:
-  type: vscode
-  workspace: /path/to/project.code-workspace
-
 server:
   type: ssh
   config: myserver
   path: /home/user/webapp
+```
+
+```yaml
+# settings/work-setting.yaml
+# urirun work-jira で実行
+jira:
+  type: chrome
+  profile: work@example.com
+  url: https://myproject.atlassian.net/jira
 ```
 
 ## 依存

@@ -1,27 +1,24 @@
 #!/bin/bash
 # urirun - YAML設定に基づいてアプリを開くランチャー
 # Usage: urirun <key>
+#        urirun <prefix>-<key>  (settings/<prefix>-setting.yaml から検索)
 
 set -euo pipefail
 
-VERSION="1.0.0"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/urirun"
-CONFIG_FILE="$CONFIG_DIR/urirun.yaml"
+VERSION="1.1.0"
+CONFIG_DIR="$HOME/.config/uribow-lab/urirun"
+CONFIG_FILE="$CONFIG_DIR/setting.yaml"
+SETTINGS_DIR="$CONFIG_DIR/settings"
 
 # --- YAML parser (simple flat 2-level) ---
-# 入力: urirun.yaml  出力: KEY.FIELD=VALUE の行群
 parse_yaml() {
   local file="$1"
   local current_key=""
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # タブをスペースに変換
     line="${line//$'\t'/  }"
-    # 空行・コメント行をスキップ
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    # トップレベルキー (インデントなし)
     if [[ "$line" =~ ^([a-zA-Z0-9_-]+):[[:space:]]*$ ]]; then
       current_key="${BASH_REMATCH[1]}"
-    # サブキー (インデントあり)
     elif [[ -n "$current_key" && "$line" =~ ^[[:space:]]+([a-zA-Z0-9_-]+):[[:space:]]*(.+)$ ]]; then
       local field="${BASH_REMATCH[1]}"
       local value="${BASH_REMATCH[2]}"
@@ -30,7 +27,6 @@ parse_yaml() {
   done < "$file"
 }
 
-# 指定キーのフィールド値を取得
 get_field() {
   local data="$1" key="$2" field="$3"
   local pattern="${key}.${field}="
@@ -39,45 +35,106 @@ get_field() {
   echo "${line#"$pattern"}"
 }
 
-# --- Usage ---
-usage() {
-  echo "urirun $VERSION - YAML設定に基づくランチャー"
-  echo ""
-  echo "Usage: urirun <key>"
-  echo "       urirun --list"
-  echo "       urirun --edit"
-  echo "       urirun --version"
-  echo ""
-  echo "Config: $CONFIG_FILE"
+# --- キー解決: setting.yaml → settings/<prefix>-setting.yaml ---
+resolve_key() {
+  local input="$1"
+
+  # 1) setting.yaml から直接検索
+  if [[ -f "$CONFIG_FILE" ]]; then
+    local data
+    data=$(parse_yaml "$CONFIG_FILE")
+    local type
+    type=$(get_field "$data" "$input" "type")
+    if [[ -n "$type" ]]; then
+      echo "$CONFIG_FILE"$'\t'"$input"
+      return 0
+    fi
+  fi
+
+  # 2) settings/<prefix>-setting.yaml から検索
+  #    入力 "some-github" → prefix候補を長い順に試す
+  #    "some-github" → "some-github"-setting.yaml (key=""), "some"-setting.yaml (key="github")
+  if [[ -d "$SETTINGS_DIR" ]]; then
+    local arg="$input"
+    while [[ "$arg" == *-* ]]; do
+      local prefix="${arg%-*}"
+      local key="${input#"$prefix"-}"
+      local settings_file="$SETTINGS_DIR/${prefix}-setting.yaml"
+      if [[ -f "$settings_file" ]]; then
+        local data
+        data=$(parse_yaml "$settings_file")
+        local type
+        type=$(get_field "$data" "$key" "type")
+        if [[ -n "$type" ]]; then
+          echo "$settings_file"$'\t'"$key"
+          return 0
+        fi
+      fi
+      # prefix をさらに短くして再試行 (例: "a-b-c" → "a-b" → "a")
+      arg="$prefix"
+    done
+  fi
+
+  return 1
 }
 
 # --- 一覧表示 ---
-list_keys() {
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "設定ファイルが見つかりません: $CONFIG_FILE"
-    echo "urirun --edit で作成してください"
-    exit 1
-  fi
+list_file_keys() {
+  local file="$1" prefix="$2"
+  [[ -f "$file" ]] || return 0
   local data
-  data=$(parse_yaml "$CONFIG_FILE")
-  echo "利用可能なキー:"
+  data=$(parse_yaml "$file")
   local seen_keys=()
   while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
     local full_key="${line%%.*}"
-    # 重複排除
     local already=false
     for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
       [[ "$k" == "$full_key" ]] && already=true && break
     done
     $already && continue
     seen_keys+=("$full_key")
+    local display_key="${prefix:+${prefix}-}${full_key}"
     local type url path
     type=$(get_field "$data" "$full_key" "type")
     url=$(get_field "$data" "$full_key" "url")
     path=$(get_field "$data" "$full_key" "path")
     local detail="${url:-$path}"
-    echo "  $full_key  ($type)  ${detail:+-> $detail}"
+    echo "  $display_key  ($type)  ${detail:+-> $detail}"
   done <<< "$data"
+}
+
+list_keys() {
+  echo "利用可能なキー:"
+
+  # setting.yaml
+  if [[ -f "$CONFIG_FILE" ]]; then
+    list_file_keys "$CONFIG_FILE" ""
+  fi
+
+  # settings/*.yaml
+  if [[ -d "$SETTINGS_DIR" ]]; then
+    for f in "$SETTINGS_DIR"/*-setting.yaml; do
+      [[ -f "$f" ]] || continue
+      local basename
+      basename="$(basename "$f")"
+      local prefix="${basename%-setting.yaml}"
+      list_file_keys "$f" "$prefix"
+    done
+  fi
+}
+
+# --- Usage ---
+usage() {
+  echo "urirun $VERSION - YAML設定に基づくランチャー"
+  echo ""
+  echo "Usage: urirun <key>              setting.yaml のキーを実行"
+  echo "       urirun <prefix>-<key>     settings/<prefix>-setting.yaml のキーを実行"
+  echo "       urirun --list             利用可能なキー一覧"
+  echo "       urirun --edit [prefix]    設定ファイルを編集"
+  echo "       urirun --version"
+  echo ""
+  echo "Config: $CONFIG_DIR/"
 }
 
 # --- メイン ---
@@ -94,10 +151,14 @@ case "$1" in
     exit 0
     ;;
   --edit|-e)
-    mkdir -p "$CONFIG_DIR"
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-      cat > "$CONFIG_FILE" << 'TMPL'
-# urirun.yaml - ランチャー設定ファイル
+    mkdir -p "$CONFIG_DIR" "$SETTINGS_DIR"
+    local_target="$CONFIG_FILE"
+    if [[ -n "${2:-}" && "$2" != -* ]]; then
+      local_target="$SETTINGS_DIR/${2}-setting.yaml"
+    fi
+    if [[ ! -f "$local_target" ]]; then
+      cat > "$local_target" << 'TMPL'
+# urirun 設定ファイル
 # 対応type: chrome, zed, vscode, ssh
 #
 # example:
@@ -107,7 +168,7 @@ case "$1" in
 #     url: https://github.com
 TMPL
     fi
-    "${EDITOR:-vi}" "$CONFIG_FILE"
+    "${EDITOR:-vi}" "$local_target"
     exit 0
     ;;
   --version|-v)
@@ -125,24 +186,21 @@ TMPL
     ;;
 esac
 
-KEY="$1"
+INPUT_KEY="$1"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "Error: 設定ファイルが見つかりません: $CONFIG_FILE"
-  echo "urirun --edit で作成してください"
-  exit 1
-fi
-
-DATA=$(parse_yaml "$CONFIG_FILE")
-
-TYPE=$(get_field "$DATA" "$KEY" "type")
-if [[ -z "$TYPE" ]]; then
-  echo "Error: キー '$KEY' が設定ファイルに見つかりません"
+# キー解決
+RESOLVED=$(resolve_key "$INPUT_KEY") || {
+  echo "Error: キー '$INPUT_KEY' が見つかりません"
   echo ""
   list_keys
   exit 1
-fi
+}
 
+RESOLVED_FILE=$(echo "$RESOLVED" | cut -f1)
+KEY=$(echo "$RESOLVED" | cut -f2)
+DATA=$(parse_yaml "$RESOLVED_FILE")
+
+TYPE=$(get_field "$DATA" "$KEY" "type")
 PROFILE=$(get_field "$DATA" "$KEY" "profile")
 URL=$(get_field "$DATA" "$KEY" "url")
 TARGET_PATH=$(get_field "$DATA" "$KEY" "path")
@@ -162,7 +220,6 @@ case "$TYPE" in
     if [[ -n "$PROFILE" ]]; then
       for dir in "$CHROME_DIR"/Default "$CHROME_DIR"/Profile\ *; do
         [[ -f "$dir/Preferences" ]] || continue
-        # JSONからemailを抽出 (python不要)
         primary_email=$(
           grep -o '"email"[[:space:]]*:[[:space:]]*"[^"]*"' "$dir/Preferences" 2>/dev/null \
           | head -1 \
@@ -179,13 +236,13 @@ case "$TYPE" in
         exit 1
       fi
 
-      echo "[$KEY] Chrome ($PROFILE_DIR / $PROFILE) -> $URL"
+      echo "[$INPUT_KEY] Chrome ($PROFILE_DIR / $PROFILE) -> $URL"
       /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
         --profile-directory="$PROFILE_DIR" \
         "$URL" >/dev/null 2>&1 &
       disown
     else
-      echo "[$KEY] Chrome -> $URL"
+      echo "[$INPUT_KEY] Chrome -> $URL"
       open -a "Google Chrome" "$URL"
     fi
     ;;
@@ -199,20 +256,20 @@ case "$TYPE" in
       echo "Error: パスが存在しません: $TARGET_PATH"
       exit 1
     fi
-    echo "[$KEY] Zed -> $TARGET_PATH"
+    echo "[$INPUT_KEY] Zed -> $TARGET_PATH"
     zed "$TARGET_PATH"
     ;;
 
   vscode)
     if [[ -n "$WORKSPACE" ]]; then
-      echo "[$KEY] VS Code (workspace) -> $WORKSPACE"
+      echo "[$INPUT_KEY] VS Code (workspace) -> $WORKSPACE"
       code "$WORKSPACE"
     elif [[ -n "$TARGET_PATH" ]]; then
       if [[ ! -d "$TARGET_PATH" ]]; then
         echo "Error: パスが存在しません: $TARGET_PATH"
         exit 1
       fi
-      echo "[$KEY] VS Code -> $TARGET_PATH"
+      echo "[$INPUT_KEY] VS Code -> $TARGET_PATH"
       code "$TARGET_PATH"
     else
       echo "Error: vscode には workspace または path が必要です"
@@ -226,10 +283,10 @@ case "$TYPE" in
       exit 1
     fi
     if [[ -n "$TARGET_PATH" ]]; then
-      echo "[$KEY] SSH -> $SSH_CONFIG (cd $TARGET_PATH)"
+      echo "[$INPUT_KEY] SSH -> $SSH_CONFIG (cd $TARGET_PATH)"
       ssh -t "$SSH_CONFIG" "cd $TARGET_PATH && exec \$SHELL -l"
     else
-      echo "[$KEY] SSH -> $SSH_CONFIG"
+      echo "[$INPUT_KEY] SSH -> $SSH_CONFIG"
       ssh "$SSH_CONFIG"
     fi
     ;;
