@@ -1,0 +1,241 @@
+#!/bin/bash
+# urirun - YAML設定に基づいてアプリを開くランチャー
+# Usage: urirun <key>
+
+set -euo pipefail
+
+VERSION="1.0.0"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/urirun"
+CONFIG_FILE="$CONFIG_DIR/urirun.yaml"
+
+# --- YAML parser (simple flat 2-level) ---
+# 入力: urirun.yaml  出力: KEY.FIELD=VALUE の行群
+parse_yaml() {
+  local file="$1"
+  local current_key=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # タブをスペースに変換
+    line="${line//$'\t'/  }"
+    # 空行・コメント行をスキップ
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    # トップレベルキー (インデントなし)
+    if [[ "$line" =~ ^([a-zA-Z0-9_-]+):[[:space:]]*$ ]]; then
+      current_key="${BASH_REMATCH[1]}"
+    # サブキー (インデントあり)
+    elif [[ -n "$current_key" && "$line" =~ ^[[:space:]]+([a-zA-Z0-9_-]+):[[:space:]]*(.+)$ ]]; then
+      local field="${BASH_REMATCH[1]}"
+      local value="${BASH_REMATCH[2]}"
+      echo "${current_key}.${field}=${value}"
+    fi
+  done < "$file"
+}
+
+# 指定キーのフィールド値を取得
+get_field() {
+  local data="$1" key="$2" field="$3"
+  local pattern="${key}.${field}="
+  local line
+  line=$(echo "$data" | grep "^${pattern}" | head -1)
+  echo "${line#"$pattern"}"
+}
+
+# --- Usage ---
+usage() {
+  echo "urirun $VERSION - YAML設定に基づくランチャー"
+  echo ""
+  echo "Usage: urirun <key>"
+  echo "       urirun --list"
+  echo "       urirun --edit"
+  echo "       urirun --version"
+  echo ""
+  echo "Config: $CONFIG_FILE"
+}
+
+# --- 一覧表示 ---
+list_keys() {
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "設定ファイルが見つかりません: $CONFIG_FILE"
+    echo "urirun --edit で作成してください"
+    exit 1
+  fi
+  local data
+  data=$(parse_yaml "$CONFIG_FILE")
+  echo "利用可能なキー:"
+  local seen_keys=()
+  while IFS= read -r line; do
+    local full_key="${line%%.*}"
+    # 重複排除
+    local already=false
+    for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
+      [[ "$k" == "$full_key" ]] && already=true && break
+    done
+    $already && continue
+    seen_keys+=("$full_key")
+    local type url path
+    type=$(get_field "$data" "$full_key" "type")
+    url=$(get_field "$data" "$full_key" "url")
+    path=$(get_field "$data" "$full_key" "path")
+    local detail="${url:-$path}"
+    echo "  $full_key  ($type)  ${detail:+-> $detail}"
+  done <<< "$data"
+}
+
+# --- メイン ---
+if [[ $# -lt 1 ]]; then
+  usage
+  echo ""
+  list_keys
+  exit 0
+fi
+
+case "$1" in
+  --list|-l)
+    list_keys
+    exit 0
+    ;;
+  --edit|-e)
+    mkdir -p "$CONFIG_DIR"
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+      cat > "$CONFIG_FILE" << 'TMPL'
+# urirun.yaml - ランチャー設定ファイル
+# 対応type: chrome, zed, vscode, ssh
+#
+# example:
+#   github:
+#     type: chrome
+#     profile: user@example.com
+#     url: https://github.com
+TMPL
+    fi
+    "${EDITOR:-vi}" "$CONFIG_FILE"
+    exit 0
+    ;;
+  --version|-v)
+    echo "urirun $VERSION"
+    exit 0
+    ;;
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  -*)
+    echo "Error: 不明なオプション '$1'"
+    usage
+    exit 1
+    ;;
+esac
+
+KEY="$1"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Error: 設定ファイルが見つかりません: $CONFIG_FILE"
+  echo "urirun --edit で作成してください"
+  exit 1
+fi
+
+DATA=$(parse_yaml "$CONFIG_FILE")
+
+TYPE=$(get_field "$DATA" "$KEY" "type")
+if [[ -z "$TYPE" ]]; then
+  echo "Error: キー '$KEY' が設定ファイルに見つかりません"
+  echo ""
+  list_keys
+  exit 1
+fi
+
+PROFILE=$(get_field "$DATA" "$KEY" "profile")
+URL=$(get_field "$DATA" "$KEY" "url")
+TARGET_PATH=$(get_field "$DATA" "$KEY" "path")
+WORKSPACE=$(get_field "$DATA" "$KEY" "workspace")
+SSH_CONFIG=$(get_field "$DATA" "$KEY" "config")
+
+case "$TYPE" in
+  chrome)
+    if [[ -z "$URL" ]]; then
+      echo "Error: chrome には url が必要です"
+      exit 1
+    fi
+
+    CHROME_DIR="$HOME/Library/Application Support/Google/Chrome"
+    PROFILE_DIR=""
+
+    if [[ -n "$PROFILE" ]]; then
+      for dir in "$CHROME_DIR"/Default "$CHROME_DIR"/Profile\ *; do
+        [[ -f "$dir/Preferences" ]] || continue
+        # JSONからemailを抽出 (python不要)
+        primary_email=$(
+          grep -o '"email"[[:space:]]*:[[:space:]]*"[^"]*"' "$dir/Preferences" 2>/dev/null \
+          | head -1 \
+          | sed 's/.*"email"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+        )
+        if [[ "$primary_email" == "$PROFILE" ]]; then
+          PROFILE_DIR="$(basename "$dir")"
+          break
+        fi
+      done
+
+      if [[ -z "$PROFILE_DIR" ]]; then
+        echo "Error: Chromeプロファイルが見つかりません: $PROFILE"
+        exit 1
+      fi
+
+      echo "[$KEY] Chrome ($PROFILE_DIR / $PROFILE) -> $URL"
+      /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+        --profile-directory="$PROFILE_DIR" \
+        "$URL" >/dev/null 2>&1 &
+      disown
+    else
+      echo "[$KEY] Chrome -> $URL"
+      open -a "Google Chrome" "$URL"
+    fi
+    ;;
+
+  zed)
+    if [[ -z "$TARGET_PATH" ]]; then
+      echo "Error: zed には path が必要です"
+      exit 1
+    fi
+    if [[ ! -d "$TARGET_PATH" ]]; then
+      echo "Error: パスが存在しません: $TARGET_PATH"
+      exit 1
+    fi
+    echo "[$KEY] Zed -> $TARGET_PATH"
+    zed "$TARGET_PATH"
+    ;;
+
+  vscode)
+    if [[ -n "$WORKSPACE" ]]; then
+      echo "[$KEY] VS Code (workspace) -> $WORKSPACE"
+      code "$WORKSPACE"
+    elif [[ -n "$TARGET_PATH" ]]; then
+      if [[ ! -d "$TARGET_PATH" ]]; then
+        echo "Error: パスが存在しません: $TARGET_PATH"
+        exit 1
+      fi
+      echo "[$KEY] VS Code -> $TARGET_PATH"
+      code "$TARGET_PATH"
+    else
+      echo "Error: vscode には workspace または path が必要です"
+      exit 1
+    fi
+    ;;
+
+  ssh)
+    if [[ -z "$SSH_CONFIG" ]]; then
+      echo "Error: ssh には config (Host名) が必要です"
+      exit 1
+    fi
+    if [[ -n "$TARGET_PATH" ]]; then
+      echo "[$KEY] SSH -> $SSH_CONFIG (cd $TARGET_PATH)"
+      ssh -t "$SSH_CONFIG" "cd $TARGET_PATH && exec \$SHELL -l"
+    else
+      echo "[$KEY] SSH -> $SSH_CONFIG"
+      ssh "$SSH_CONFIG"
+    fi
+    ;;
+
+  *)
+    echo "Error: 未対応のtype '$TYPE'"
+    exit 1
+    ;;
+esac
