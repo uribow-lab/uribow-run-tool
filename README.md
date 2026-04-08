@@ -53,6 +53,7 @@ urirun --version
 | zed | Zedエディタでプロジェクトを開く |
 | vscode | VS Codeでプロジェクトを開く |
 | ssh | SSH接続する |
+| command | シェルコマンドを順番に実行する |
 
 ### 設定例
 
@@ -75,6 +76,10 @@ server:
   type: ssh
   config: myserver
   path: /home/user/webapp
+
+check:
+  type: command
+  commands: "ls;cd ~;ls -la"
 ```
 
 ```yaml
@@ -86,10 +91,59 @@ jira:
   url: https://myproject.atlassian.net/jira
 ```
 
+## 更新
+
+```bash
+brew update
+brew upgrade urirun
+```
+
 ## 依存
 
 - bash (macOS標準)
 - 外部依存なし（Python不要）
+
+## 開発者向け：リリース手順
+
+コードを修正した後、他のMacで `brew upgrade` できるようにするまでの手順。
+
+### 1. コミット＆プッシュ
+
+```bash
+git add .
+git commit -m "変更内容"
+git push origin main
+```
+
+### 2. タグを作成してプッシュ
+
+```bash
+git tag v1.x.0
+git push origin v1.x.0
+```
+
+GitHubが自動でtar.gzアーカイブを生成する。
+
+### 3. sha256を取得
+
+```bash
+curl -sL https://github.com/uribow-lab/uribow-run-tool/archive/refs/tags/v1.x.0.tar.gz | shasum -a 256
+```
+
+### 4. Formulaを更新
+
+`Formula/urirun.rb` の `version`、`url`、`sha256` を更新し、tapリポジトリ（`uribow-lab/homebrew-tap`）にも反映する。
+
+```bash
+# tapリポジトリにFormulaをコピーしてプッシュ
+cp Formula/urirun.rb /path/to/homebrew-tap/Formula/
+cd /path/to/homebrew-tap
+git add Formula/urirun.rb
+git commit -m "Bump urirun to v1.x.0"
+git push origin main
+```
+
+これで他のMacから `brew update && brew upgrade urirun` で更新できるようになる。
 
 ## ライセンス
 

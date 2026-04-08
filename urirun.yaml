@@ -1,0 +1,31 @@
+github:
+  type: chrome
+  profile: kyukoh.user@gmail.com
+  url: https://github.com/uribow-lab/uribow-dashboard
+
+jira:
+  type: chrome
+  profile: kyukoh.user@gmail.com
+  url: https://uribow-lab.atlassian.net/jira/software/projects/UD/boards/36
+
+front:
+  type: chrome
+  profile: kyukoh.user@gmail.com
+  url: http://localhost:5173
+
+zed:
+  type: zed
+  path: /Volumes/HDPC/01_MyProjects/00_webapp/dashboard-package/dashboard
+
+code:
+  type: vscode
+  path: /Volumes/HDPC/01_MyProjects/00_webapp/dashboard-package/dashboard
+
+ssh:
+  type: ssh
+  config: uribow
+  path: /home/tohru/webapp
+
+check:
+  type: command
+  commands: "ls;cd ~;ls -la"

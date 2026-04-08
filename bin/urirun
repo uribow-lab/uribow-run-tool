@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 CONFIG_DIR="$HOME/.config/uribow-lab/urirun"
 CONFIG_FILE="$CONFIG_DIR/setting.yaml"
 SETTINGS_DIR="$CONFIG_DIR/settings"
@@ -159,7 +159,7 @@ case "$1" in
     if [[ ! -f "$local_target" ]]; then
       cat > "$local_target" << 'TMPL'
 # urirun 設定ファイル
-# 対応type: chrome, zed, vscode, ssh
+# 対応type: chrome, zed, vscode, ssh, command
 #
 # example:
 #   github:
@@ -289,6 +289,22 @@ case "$TYPE" in
       echo "[$INPUT_KEY] SSH -> $SSH_CONFIG"
       ssh "$SSH_CONFIG"
     fi
+    ;;
+
+  command)
+    COMMANDS=$(get_field "$DATA" "$KEY" "commands")
+    if [[ -z "$COMMANDS" ]]; then
+      echo "Error: command には commands が必要です"
+      exit 1
+    fi
+    echo "[$INPUT_KEY] Command -> $COMMANDS"
+    IFS=';' read -ra CMD_LIST <<< "$COMMANDS"
+    for cmd in "${CMD_LIST[@]}"; do
+      cmd=$(echo "$cmd" | xargs)
+      [[ -z "$cmd" ]] && continue
+      echo "  > $cmd"
+      eval "$cmd"
+    done
     ;;
 
   *)
