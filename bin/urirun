@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.2.1"
+VERSION="1.3.1"
 CONFIG_DIR="$HOME/.config/uribow-lab/urirun"
 CONFIG_FILE="$CONFIG_DIR/setting.yaml"
 SETTINGS_DIR="$CONFIG_DIR/settings"
@@ -140,6 +140,281 @@ list_keys() {
   fi
 }
 
+# --- インタラクティブ選択 ---
+
+SELECTED_INDEX=-1
+SEL_ITEMS=()
+SEL_TYPES=()
+SEL_VALUES=()
+INTERACTIVE_KEY=""
+
+interactive_select() {
+  local title="$1"; shift
+  local items=("$@")
+  local count=${#items[@]}
+  SELECTED_INDEX=-1
+  [[ $count -eq 0 ]] && return 1
+
+  exec 3</dev/tty || {
+    echo "Error: インタラクティブ選択は端末からのみ利用可能です" >&2
+    return 1
+  }
+
+  printf '\033[?25l' >&2
+  printf '%s\n' "$title" >&2
+  printf '%s\n' "  (↑/↓ k/j: 選択、←/h: 戻る、Enter: 決定、q/ESC: キャンセル)" >&2
+
+  local i
+  local idx=0
+  for ((i=0; i<count; i++)); do
+    if [[ $i -eq $idx ]]; then
+      printf '\033[7m▶ %s\033[0m\n' "${items[i]}" >&2
+    else
+      printf '  %s\n' "${items[i]}" >&2
+    fi
+  done
+
+  local result=-1
+  while true; do
+    local k1 k2=""
+    if ! IFS= read -rsn1 k1 <&3; then
+      result=-1; break
+    fi
+    case "$k1" in
+      $'\x1b')
+        if IFS= read -rsn2 -t 1 k2 <&3 2>/dev/null; then
+          case "$k2" in
+            '[A') if (( idx > 0 )); then idx=$((idx-1)); fi ;;
+            '[B') if (( idx < count-1 )); then idx=$((idx+1)); fi ;;
+            '[D') result=-2; break ;;
+            *) result=-1; break ;;
+          esac
+        else
+          result=-1; break
+        fi
+        ;;
+      '')
+        result=$idx; break ;;
+      q|Q)
+        result=-1; break ;;
+      h|H)
+        result=-2; break ;;
+      j)
+        if (( idx < count-1 )); then idx=$((idx+1)); fi ;;
+      k)
+        if (( idx > 0 )); then idx=$((idx-1)); fi ;;
+    esac
+
+    printf '\033[%dA' "$count" >&2
+    for ((i=0; i<count; i++)); do
+      printf '\033[2K' >&2
+      if [[ $i -eq $idx ]]; then
+        printf '\033[7m▶ %s\033[0m\n' "${items[i]}" >&2
+      else
+        printf '  %s\n' "${items[i]}" >&2
+      fi
+    done
+  done
+
+  printf '\033[?25h' >&2
+  exec 3<&-
+
+  if (( result == -2 )); then
+    return 2
+  fi
+  if (( result < 0 )); then
+    return 130
+  fi
+  SELECTED_INDEX=$result
+  return 0
+}
+
+strip_quotes() {
+  local s="$1"
+  s="${s#\"}"; s="${s%\"}"
+  s="${s#\'}"; s="${s%\'}"
+  printf '%s' "$s"
+}
+
+# _KEY_COL / _TYPE_COL / _DESC_COL から、縦位置を揃えた SEL_ITEMS を構築する
+format_sel_items() {
+  SEL_ITEMS=()
+  local n=${#_KEY_COL[@]}
+  (( n == 0 )) && return 0
+
+  local max_key=0 max_type=0
+  local i
+  for ((i=0; i<n; i++)); do
+    (( ${#_KEY_COL[i]} > max_key ))   && max_key=${#_KEY_COL[i]}
+    (( ${#_TYPE_COL[i]} > max_type )) && max_type=${#_TYPE_COL[i]}
+  done
+
+  for ((i=0; i<n; i++)); do
+    local line
+    line=$(printf "%-${max_key}s  %-${max_type}s" "${_KEY_COL[i]}" "${_TYPE_COL[i]}")
+    if [[ -n "${_DESC_COL[i]}" ]]; then
+      line+="  ${_DESC_COL[i]}"
+    fi
+    SEL_ITEMS+=("$line")
+  done
+}
+
+collect_top_level() {
+  SEL_ITEMS=()
+  SEL_TYPES=()
+  SEL_VALUES=()
+  _KEY_COL=()
+  _TYPE_COL=()
+  _DESC_COL=()
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    local data
+    data=$(parse_yaml "$CONFIG_FILE")
+    local seen_keys=()
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      local full_key="${line%%.*}"
+      local already=false
+      local k
+      for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
+        [[ "$k" == "$full_key" ]] && already=true && break
+      done
+      $already && continue
+      seen_keys+=("$full_key")
+      local type desc
+      type=$(get_field "$data" "$full_key" "type")
+      desc=$(get_field "$data" "$full_key" "description")
+      desc=$(strip_quotes "$desc")
+      _KEY_COL+=("$full_key")
+      _TYPE_COL+=("($type)")
+      _DESC_COL+=("$desc")
+      SEL_TYPES+=("key")
+      SEL_VALUES+=("$full_key")
+    done <<< "$data"
+  fi
+
+  if [[ -d "$SETTINGS_DIR" ]]; then
+    local f
+    for f in "$SETTINGS_DIR"/*-setting.yaml; do
+      [[ -f "$f" ]] || continue
+      local basename
+      basename="$(basename "$f")"
+      local pfx="${basename%-setting.yaml}"
+      _KEY_COL+=("[$pfx]")
+      _TYPE_COL+=("(prefix ▶)")
+      _DESC_COL+=("")
+      SEL_TYPES+=("prefix")
+      SEL_VALUES+=("$pfx")
+    done
+  fi
+
+  format_sel_items
+}
+
+collect_prefix_keys() {
+  local prefix="$1"
+  local settings_file="$SETTINGS_DIR/${prefix}-setting.yaml"
+  SEL_ITEMS=()
+  SEL_TYPES=()
+  SEL_VALUES=()
+  _KEY_COL=()
+  _TYPE_COL=()
+  _DESC_COL=()
+  [[ -f "$settings_file" ]] || return 1
+
+  local data
+  data=$(parse_yaml "$settings_file")
+  local seen_keys=()
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local full_key="${line%%.*}"
+    local already=false
+    local k
+    for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
+      [[ "$k" == "$full_key" ]] && already=true && break
+    done
+    $already && continue
+    seen_keys+=("$full_key")
+    local type desc
+    type=$(get_field "$data" "$full_key" "type")
+    desc=$(get_field "$data" "$full_key" "description")
+    desc=$(strip_quotes "$desc")
+    _KEY_COL+=("$full_key")
+    _TYPE_COL+=("($type)")
+    _DESC_COL+=("$desc")
+    SEL_TYPES+=("key")
+    SEL_VALUES+=("$full_key")
+  done <<< "$data"
+
+  format_sel_items
+}
+
+run_interactive() {
+  local prefix="${1:-}"
+  INTERACTIVE_KEY=""
+
+  while true; do
+    if [[ -z "$prefix" ]]; then
+      collect_top_level
+    else
+      collect_prefix_keys "$prefix" || {
+        echo "Error: prefix '$prefix' の設定ファイルが見つかりません" >&2
+        return 1
+      }
+    fi
+
+    if [[ ${#SEL_ITEMS[@]} -eq 0 ]]; then
+      if [[ -z "$prefix" ]]; then
+        echo "利用可能なキーがありません。'urirun --edit' で設定してください。" >&2
+      else
+        echo "'$prefix' にキーがありません。" >&2
+      fi
+      return 1
+    fi
+
+    local title
+    if [[ -z "$prefix" ]]; then
+      title="利用可能なキーを選択してください:"
+    else
+      title="[$prefix] キーを選択してください:"
+    fi
+
+    local items_copy=("${SEL_ITEMS[@]}")
+    local types_copy=("${SEL_TYPES[@]}")
+    local values_copy=("${SEL_VALUES[@]}")
+
+    interactive_select "$title" "${items_copy[@]}"
+    local rc=$?
+
+    if (( rc == 130 )); then
+      return 130
+    fi
+    if (( rc == 2 )); then
+      if [[ -n "$prefix" ]]; then
+        prefix=""
+        continue
+      fi
+      continue
+    fi
+
+    local selected=$SELECTED_INDEX
+    local sel_type="${types_copy[selected]}"
+    local sel_value="${values_copy[selected]}"
+
+    if [[ "$sel_type" == "prefix" ]]; then
+      prefix="$sel_value"
+      continue
+    fi
+
+    if [[ -z "$prefix" ]]; then
+      INTERACTIVE_KEY="$sel_value"
+    else
+      INTERACTIVE_KEY="${prefix}-${sel_value}"
+    fi
+    return 0
+  done
+}
+
 # --- Usage ---
 usage() {
   echo "urirun $VERSION - YAML設定に基づくランチャー" >&2
@@ -156,10 +431,18 @@ usage() {
 
 # --- メイン ---
 if [[ $# -lt 1 ]]; then
-  usage
-  echo "" >&2
-  list_keys
-  exit 0
+  if [[ -t 1 ]] && [[ -r /dev/tty ]]; then
+    if ! run_interactive; then
+      exit 0
+    fi
+    INPUT_KEY="$INTERACTIVE_KEY"
+    set -- "$INPUT_KEY"
+  else
+    usage
+    echo "" >&2
+    list_keys
+    exit 0
+  fi
 fi
 
 case "$1" in
@@ -221,6 +504,16 @@ SHELLINIT
 esac
 
 INPUT_KEY="$1"
+
+# プレフィックス単体で呼ばれた場合、直接キーとして解決できなければインタラクティブに切替
+if [[ -f "$SETTINGS_DIR/${INPUT_KEY}-setting.yaml" ]] && [[ -t 1 ]] && [[ -r /dev/tty ]]; then
+  if ! resolve_key "$INPUT_KEY" >/dev/null 2>&1; then
+    if ! run_interactive "$INPUT_KEY"; then
+      exit 0
+    fi
+    INPUT_KEY="$INTERACTIVE_KEY"
+  fi
+fi
 
 # キー解決
 RESOLVED=$(resolve_key "$INPUT_KEY") || {
