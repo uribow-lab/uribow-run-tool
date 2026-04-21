@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 CONFIG_DIR="$HOME/.config/uribow-lab/urirun"
 CONFIG_FILE="$CONFIG_DIR/setting.yaml"
 SETTINGS_DIR="$CONFIG_DIR/settings"
@@ -95,17 +95,33 @@ list_file_keys() {
     $already && continue
     seen_keys+=("$full_key")
     local display_key="${prefix:+${prefix}-}${full_key}"
-    local type url path
+    local type url path desc
     type=$(get_field "$data" "$full_key" "type")
     url=$(get_field "$data" "$full_key" "url")
     path=$(get_field "$data" "$full_key" "path")
+    desc=$(get_field "$data" "$full_key" "description")
     local detail="${url:-$path}"
-    echo "  $display_key  ($type)  ${detail:+-> $detail}"
+    local line_out="  $display_key  ($type)  ${detail:+-> $detail}"
+    [[ -n "$desc" ]] && line_out+="  # $desc"
+    echo "$line_out" >&2
   done <<< "$data"
 }
 
 list_keys() {
-  echo "利用可能なキー:"
+  local filter="${1:-}"
+
+  if [[ -n "$filter" ]]; then
+    local settings_file="$SETTINGS_DIR/${filter}-setting.yaml"
+    if [[ ! -f "$settings_file" ]]; then
+      echo "Error: prefix '$filter' の設定ファイルが見つかりません" >&2
+      exit 1
+    fi
+    echo "利用可能なキー ($filter):" >&2
+    list_file_keys "$settings_file" "$filter"
+    return
+  fi
+
+  echo "利用可能なキー:" >&2
 
   # setting.yaml
   if [[ -f "$CONFIG_FILE" ]]; then
@@ -126,28 +142,29 @@ list_keys() {
 
 # --- Usage ---
 usage() {
-  echo "urirun $VERSION - YAML設定に基づくランチャー"
-  echo ""
-  echo "Usage: urirun <key>              setting.yaml のキーを実行"
-  echo "       urirun <prefix>-<key>     settings/<prefix>-setting.yaml のキーを実行"
-  echo "       urirun --list             利用可能なキー一覧"
-  echo "       urirun --edit [prefix]    設定ファイルを編集"
-  echo "       urirun --version"
-  echo ""
-  echo "Config: $CONFIG_DIR/"
+  echo "urirun $VERSION - YAML設定に基づくランチャー" >&2
+  echo "" >&2
+  echo "Usage: urirun <key>              setting.yaml のキーを実行" >&2
+  echo "       urirun <prefix>-<key>     settings/<prefix>-setting.yaml のキーを実行" >&2
+  echo "       urirun --list [prefix]    利用可能なキー一覧 (prefix指定で絞り込み)" >&2
+  echo "       urirun --edit [prefix]    設定ファイルを編集" >&2
+  echo "       urirun --shell-init" >&2
+  echo "       urirun --version" >&2
+  echo "" >&2
+  echo "Config: $CONFIG_DIR/" >&2
 }
 
 # --- メイン ---
 if [[ $# -lt 1 ]]; then
   usage
-  echo ""
+  echo "" >&2
   list_keys
   exit 0
 fi
 
 case "$1" in
   --list|-l)
-    list_keys
+    list_keys "${2:-}"
     exit 0
     ;;
   --edit|-e)
@@ -172,7 +189,24 @@ TMPL
     exit 0
     ;;
   --version|-v)
-    echo "urirun $VERSION"
+    echo "urirun $VERSION" >&2
+    exit 0
+    ;;
+  --shell-init)
+    URIRUN_BIN=$(command -v urirun 2>/dev/null || echo "$0")
+    cat << SHELLINIT
+urirun() {
+  local _urirun_eval_file="/tmp/.urirun_eval_\$\$"
+  rm -f "\$_urirun_eval_file"
+  URIRUN_EVAL_FILE="\$_urirun_eval_file" command urirun "\$@"
+  local rc=\$?
+  if [[ -f "\$_urirun_eval_file" ]]; then
+    eval "\$(cat "\$_urirun_eval_file")"
+    rm -f "\$_urirun_eval_file"
+  fi
+  return \$rc
+}
+SHELLINIT
     exit 0
     ;;
   --help|-h)
@@ -180,7 +214,7 @@ TMPL
     exit 0
     ;;
   -*)
-    echo "Error: 不明なオプション '$1'"
+    echo "Error: 不明なオプション '$1'" >&2
     usage
     exit 1
     ;;
@@ -190,8 +224,8 @@ INPUT_KEY="$1"
 
 # キー解決
 RESOLVED=$(resolve_key "$INPUT_KEY") || {
-  echo "Error: キー '$INPUT_KEY' が見つかりません"
-  echo ""
+  echo "Error: キー '$INPUT_KEY' が見つかりません" >&2
+  echo "" >&2
   list_keys
   exit 1
 }
@@ -210,7 +244,7 @@ SSH_CONFIG=$(get_field "$DATA" "$KEY" "config")
 case "$TYPE" in
   chrome)
     if [[ -z "$URL" ]]; then
-      echo "Error: chrome には url が必要です"
+      echo "Error: chrome には url が必要です" >&2
       exit 1
     fi
 
@@ -232,61 +266,63 @@ case "$TYPE" in
       done
 
       if [[ -z "$PROFILE_DIR" ]]; then
-        echo "Error: Chromeプロファイルが見つかりません: $PROFILE"
+        echo "Error: Chromeプロファイルが見つかりません: $PROFILE" >&2
         exit 1
       fi
 
-      echo "[$INPUT_KEY] Chrome ($PROFILE_DIR / $PROFILE) -> $URL"
+      echo "[$INPUT_KEY] Chrome ($PROFILE_DIR / $PROFILE) -> $URL" >&2
       /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
         --profile-directory="$PROFILE_DIR" \
         "$URL" >/dev/null 2>&1 &
       disown
     else
-      echo "[$INPUT_KEY] Chrome -> $URL"
+      echo "[$INPUT_KEY] Chrome -> $URL" >&2
       open -a "Google Chrome" "$URL"
     fi
     ;;
 
   zed)
     if [[ -z "$TARGET_PATH" ]]; then
-      echo "Error: zed には path が必要です"
+      echo "Error: zed には path が必要です" >&2
       exit 1
     fi
     if [[ ! -d "$TARGET_PATH" ]]; then
-      echo "Error: パスが存在しません: $TARGET_PATH"
+      echo "Error: パスが存在しません: $TARGET_PATH" >&2
       exit 1
     fi
-    echo "[$INPUT_KEY] Zed -> $TARGET_PATH"
+    echo "[$INPUT_KEY] Zed -> $TARGET_PATH" >&2
     zed "$TARGET_PATH"
     ;;
 
   vscode)
+    VSCODE_CMD=$(get_field "$DATA" "$KEY" "command")
+    VSCODE_CMD="${VSCODE_CMD:-code}"
     if [[ -n "$WORKSPACE" ]]; then
-      echo "[$INPUT_KEY] VS Code (workspace) -> $WORKSPACE"
-      code "$WORKSPACE"
+      echo "[$INPUT_KEY] VS Code ($VSCODE_CMD, workspace) -> $WORKSPACE" >&2
+      "$VSCODE_CMD" "$WORKSPACE"
     elif [[ -n "$TARGET_PATH" ]]; then
       if [[ ! -d "$TARGET_PATH" ]]; then
-        echo "Error: パスが存在しません: $TARGET_PATH"
+        echo "Error: パスが存在しません: $TARGET_PATH" >&2
         exit 1
       fi
-      echo "[$INPUT_KEY] VS Code -> $TARGET_PATH"
-      code "$TARGET_PATH"
+      echo "[$INPUT_KEY] VS Code ($VSCODE_CMD) -> $TARGET_PATH" >&2
+      "$VSCODE_CMD" "$TARGET_PATH"
     else
-      echo "Error: vscode には workspace または path が必要です"
+      echo "Error: vscode には workspace または path が必要です" >&2
       exit 1
     fi
     ;;
 
   ssh)
     if [[ -z "$SSH_CONFIG" ]]; then
-      echo "Error: ssh には config (Host名) が必要です"
+      echo "Error: ssh には config (Host名) が必要です" >&2
       exit 1
     fi
     if [[ -n "$TARGET_PATH" ]]; then
-      echo "[$INPUT_KEY] SSH -> $SSH_CONFIG (cd $TARGET_PATH)"
+      echo "[$INPUT_KEY] SSH -> $SSH_CONFIG (cd $TARGET_PATH)" >&2
       ssh -t "$SSH_CONFIG" "cd $TARGET_PATH && exec \$SHELL -l"
     else
-      echo "[$INPUT_KEY] SSH -> $SSH_CONFIG"
+      echo "[$INPUT_KEY] SSH -> $SSH_CONFIG" >&2
       ssh "$SSH_CONFIG"
     fi
     ;;
@@ -294,21 +330,27 @@ case "$TYPE" in
   command)
     COMMANDS=$(get_field "$DATA" "$KEY" "commands")
     if [[ -z "$COMMANDS" ]]; then
-      echo "Error: command には commands が必要です"
+      echo "Error: command には commands が必要です" >&2
       exit 1
     fi
-    echo "[$INPUT_KEY] Command -> $COMMANDS"
+    echo "[$INPUT_KEY] Command -> $COMMANDS" >&2
     IFS=';' read -ra CMD_LIST <<< "$COMMANDS"
+    EVAL_CMDS=""
     for cmd in "${CMD_LIST[@]}"; do
       cmd=$(echo "$cmd" | xargs)
       [[ -z "$cmd" ]] && continue
-      echo "  > $cmd"
-      eval "$cmd"
+      echo "  > $cmd" >&2
+      EVAL_CMDS+="$cmd"$'\n'
     done
+    if [[ -n "${URIRUN_EVAL_FILE:-}" ]]; then
+      printf '%s' "$EVAL_CMDS" > "$URIRUN_EVAL_FILE"
+    else
+      printf '%s' "$EVAL_CMDS"
+    fi
     ;;
 
   *)
-    echo "Error: 未対応のtype '$TYPE'"
+    echo "Error: 未対応のtype '$TYPE'" >&2
     exit 1
     ;;
 esac

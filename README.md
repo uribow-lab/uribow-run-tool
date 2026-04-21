@@ -9,6 +9,16 @@ brew tap uribow-lab/tap
 brew install urirun
 ```
 
+## シェル関数の有効化
+
+`command` タイプで呼び出し元のシェルに影響を与える（`cd` など）には、以下を `~/.bashrc` または `~/.zshrc` に追加する。
+
+```bash
+eval "$(urirun --shell-init)"
+```
+
+これにより `urirun` がシェル関数として定義され、`command` タイプの出力が現在のシェルで実行される。
+
 ## 使い方
 
 ```bash
@@ -59,6 +69,15 @@ urirun --version
 
 ```yaml
 # setting.yaml
+
+# zellij
+# .config/zellij/layouts/[レイアウトファイル名].kdl
+# zellij -s [セッション名] -n [レイアウトファイル名]
+dev:
+  type: command
+  commands: "zellij -s plgl -n dev-plgl"
+  description: "開発環境を開く"
+
 github:
   type: chrome
   profile: user@example.com

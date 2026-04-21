@@ -10,6 +10,15 @@ class Urirun < Formula
     bin.install "bin/urirun"
   end
 
+  def caveats
+    <<~EOS
+      command タイプ（cd等）を呼び出し元シェルに反映するには、
+      ~/.bashrc または ~/.zshrc に以下を追加してください:
+
+        eval "$(urirun --shell-init)"
+    EOS
+  end
+
   test do
     assert_match "urirun", shell_output("#{bin}/urirun --version")
   end

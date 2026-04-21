@@ -64,8 +64,11 @@ cp Formula/urirun.rb /usr/local/Homebrew/Library/Taps/uribow-lab/homebrew-tap/Fo
 cd /usr/local/Homebrew/Library/Taps/uribow-lab/homebrew-tap
 git add Formula/urirun.rb
 git commit -m "Bump urirun to v<VERSION>"
-git push origin main
+GH_TOKEN=$(gh auth token) git -c "http.https://github.com/.extraheader=Authorization: basic $(echo -n "x-access-token:$(gh auth token)" | base64)" push origin main
 ```
+
+- tapリポジトリはHomebrewがHTTPSでcloneしており、通常のgit credentialが効かない場合がある
+- `gh auth token` を使ってHTTPS認証を行う
 
 ### 8. 完了報告
 
