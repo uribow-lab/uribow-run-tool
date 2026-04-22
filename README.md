@@ -22,6 +22,12 @@ eval "$(urirun --shell-init)"
 ## 使い方
 
 ```bash
+# 引数なしで対話選択（setting.yaml のキー + settings/ のプレフィックスから選択）
+urirun
+
+# プレフィックス単体で対話選択（settings/<prefix>-setting.yaml のキーから選択）
+urirun <prefix>
+
 # setting.yaml のキーを実行
 urirun <key>
 
@@ -38,6 +44,19 @@ urirun --edit <prefix>   # settings/<prefix>-setting.yaml を編集
 # バージョン表示
 urirun --version
 ```
+
+### 対話選択モード
+
+引数なしまたはプレフィックスのみで実行すると、カーソルキーで選択できるメニューが表示される。
+
+- `↑` / `↓` または `k` / `j` で項目を移動
+- `Enter` で決定
+- `←` または `h` で親メニューに戻る（プレフィックス配下 → トップレベル）
+- `q` または `ESC` でキャンセル
+
+引数なしで実行した場合、`setting.yaml` の直接キーと `settings/` 配下のプレフィックスが一覧される。プレフィックスを選択すると、その配下のキー一覧に進む。親メニューに戻りたいときは `←` / `h` を押す。
+
+パイプやリダイレクト（非対話実行）の場合は従来どおり `usage` と一覧が表示される。
 
 ## 設定ファイル
 
