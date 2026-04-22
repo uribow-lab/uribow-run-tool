@@ -1,28 +1,53 @@
 #!/bin/bash
 # urirun - YAML設定に基づいてアプリを開くランチャー
 # Usage: urirun <key>
-#        urirun <prefix>-<key>  (settings/<prefix>-setting.yaml から検索)
+#        urirun <プロジェクト>-<key>  (settings/<プロジェクト>-setting.yaml から検索)
 
 set -euo pipefail
 
-VERSION="1.3.1"
+VERSION="1.4.0"
 CONFIG_DIR="$HOME/.config/uribow-lab/urirun"
 CONFIG_FILE="$CONFIG_DIR/setting.yaml"
 SETTINGS_DIR="$CONFIG_DIR/settings"
 
-# --- YAML parser (simple flat 2-level) ---
+# --- YAML parser ---
+# 新書式:
+#   name: ...
+#   description: ...
+#   keys:
+#     <key>:
+#       type: ...
+#       ...
+# 出力:
+#   __root__.<field>=<value>   (トップレベルの name, description 等)
+#   <key>.<field>=<value>      (keys: 配下の各キーのフィールド)
 parse_yaml() {
   local file="$1"
   local current_key=""
+  local in_keys=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line//$'\t'/  }"
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" =~ ^([a-zA-Z0-9_-]+):[[:space:]]*$ ]]; then
-      current_key="${BASH_REMATCH[1]}"
-    elif [[ -n "$current_key" && "$line" =~ ^[[:space:]]+([a-zA-Z0-9_-]+):[[:space:]]*(.+)$ ]]; then
-      local field="${BASH_REMATCH[1]}"
-      local value="${BASH_REMATCH[2]}"
-      echo "${current_key}.${field}=${value}"
+    if [[ "$line" =~ ^(\ *)([a-zA-Z0-9_-]+):[[:space:]]*(.*)$ ]]; then
+      local indent_str="${BASH_REMATCH[1]}"
+      local name="${BASH_REMATCH[2]}"
+      local value="${BASH_REMATCH[3]}"
+      local indent=${#indent_str}
+
+      if (( indent == 0 )); then
+        if [[ "$name" == "keys" && -z "$value" ]]; then
+          in_keys=1
+          current_key=""
+        elif [[ -n "$value" ]]; then
+          echo "__root__.${name}=${value}"
+          in_keys=0
+          current_key=""
+        fi
+      elif (( in_keys )) && (( indent == 2 )) && [[ -z "$value" ]]; then
+        current_key="$name"
+      elif (( in_keys )) && (( indent == 4 )) && [[ -n "$value" ]] && [[ -n "$current_key" ]]; then
+        echo "${current_key}.${name}=${value}"
+      fi
     fi
   done < "$file"
 }
@@ -30,6 +55,14 @@ parse_yaml() {
 get_field() {
   local data="$1" key="$2" field="$3"
   local pattern="${key}.${field}="
+  local line
+  line=$(echo "$data" | grep "^${pattern}" | head -1)
+  echo "${line#"$pattern"}"
+}
+
+get_root_field() {
+  local data="$1" field="$2"
+  local pattern="__root__.${field}="
   local line
   line=$(echo "$data" | grep "^${pattern}" | head -1)
   echo "${line#"$pattern"}"
@@ -88,6 +121,7 @@ list_file_keys() {
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     local full_key="${line%%.*}"
+    [[ "$full_key" == "__root__" ]] && continue
     local already=false
     for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
       [[ "$k" == "$full_key" ]] && already=true && break
@@ -100,9 +134,10 @@ list_file_keys() {
     url=$(get_field "$data" "$full_key" "url")
     path=$(get_field "$data" "$full_key" "path")
     desc=$(get_field "$data" "$full_key" "description")
+    desc=$(strip_quotes "$desc")
     local detail="${url:-$path}"
     local line_out="  $display_key  ($type)  ${detail:+-> $detail}"
-    [[ -n "$desc" ]] && line_out+="  # $desc"
+    [[ -n "$desc" ]] && line_out+="  $desc"
     echo "$line_out" >&2
   done <<< "$data"
 }
@@ -113,10 +148,18 @@ list_keys() {
   if [[ -n "$filter" ]]; then
     local settings_file="$SETTINGS_DIR/${filter}-setting.yaml"
     if [[ ! -f "$settings_file" ]]; then
-      echo "Error: prefix '$filter' の設定ファイルが見つかりません" >&2
+      echo "Error: プロジェクト '$filter' の設定ファイルが見つかりません" >&2
       exit 1
     fi
-    echo "利用可能なキー ($filter):" >&2
+    local data pname
+    data=$(parse_yaml "$settings_file")
+    pname=$(get_root_field "$data" "name")
+    pname=$(strip_quotes "$pname")
+    if [[ -n "$pname" ]]; then
+      echo "利用可能なキー [$filter] $pname:" >&2
+    else
+      echo "利用可能なキー [$filter]:" >&2
+    fi
     list_file_keys "$settings_file" "$filter"
     return
   fi
@@ -236,27 +279,41 @@ strip_quotes() {
   printf '%s' "$s"
 }
 
-# _KEY_COL / _TYPE_COL / _DESC_COL から、縦位置を揃えた SEL_ITEMS を構築する
+# _KEY_COL / _DESC_COL から、縦位置を揃えた SEL_ITEMS を構築する
 format_sel_items() {
   SEL_ITEMS=()
   local n=${#_KEY_COL[@]}
   (( n == 0 )) && return 0
 
-  local max_key=0 max_type=0
+  local max_key=0
   local i
   for ((i=0; i<n; i++)); do
-    (( ${#_KEY_COL[i]} > max_key ))   && max_key=${#_KEY_COL[i]}
-    (( ${#_TYPE_COL[i]} > max_type )) && max_type=${#_TYPE_COL[i]}
+    (( ${#_KEY_COL[i]} > max_key )) && max_key=${#_KEY_COL[i]}
   done
 
   for ((i=0; i<n; i++)); do
     local line
-    line=$(printf "%-${max_key}s  %-${max_type}s" "${_KEY_COL[i]}" "${_TYPE_COL[i]}")
     if [[ -n "${_DESC_COL[i]}" ]]; then
-      line+="  ${_DESC_COL[i]}"
+      line=$(printf "%-${max_key}s  %s" "${_KEY_COL[i]}" "${_DESC_COL[i]}")
+    else
+      line="${_KEY_COL[i]}"
     fi
     SEL_ITEMS+=("$line")
   done
+}
+
+# キー配下の description を取得。description が空/未設定なら (type) を返す。
+key_display_right() {
+  local data="$1" key="$2"
+  local desc type
+  desc=$(get_field "$data" "$key" "description")
+  desc=$(strip_quotes "$desc")
+  if [[ -n "$desc" ]]; then
+    printf '%s' "$desc"
+  else
+    type=$(get_field "$data" "$key" "type")
+    printf '(%s)' "$type"
+  fi
 }
 
 collect_top_level() {
@@ -264,7 +321,6 @@ collect_top_level() {
   SEL_TYPES=()
   SEL_VALUES=()
   _KEY_COL=()
-  _TYPE_COL=()
   _DESC_COL=()
 
   if [[ -f "$CONFIG_FILE" ]]; then
@@ -274,6 +330,7 @@ collect_top_level() {
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       local full_key="${line%%.*}"
+      [[ "$full_key" == "__root__" ]] && continue
       local already=false
       local k
       for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
@@ -281,13 +338,8 @@ collect_top_level() {
       done
       $already && continue
       seen_keys+=("$full_key")
-      local type desc
-      type=$(get_field "$data" "$full_key" "type")
-      desc=$(get_field "$data" "$full_key" "description")
-      desc=$(strip_quotes "$desc")
       _KEY_COL+=("$full_key")
-      _TYPE_COL+=("($type)")
-      _DESC_COL+=("$desc")
+      _DESC_COL+=("$(key_display_right "$data" "$full_key")")
       SEL_TYPES+=("key")
       SEL_VALUES+=("$full_key")
     done <<< "$data"
@@ -300,9 +352,12 @@ collect_top_level() {
       local basename
       basename="$(basename "$f")"
       local pfx="${basename%-setting.yaml}"
+      local pdata pname
+      pdata=$(parse_yaml "$f")
+      pname=$(get_root_field "$pdata" "name")
+      pname=$(strip_quotes "$pname")
       _KEY_COL+=("[$pfx]")
-      _TYPE_COL+=("(prefix ▶)")
-      _DESC_COL+=("")
+      _DESC_COL+=("$pname")
       SEL_TYPES+=("prefix")
       SEL_VALUES+=("$pfx")
     done
@@ -318,7 +373,6 @@ collect_prefix_keys() {
   SEL_TYPES=()
   SEL_VALUES=()
   _KEY_COL=()
-  _TYPE_COL=()
   _DESC_COL=()
   [[ -f "$settings_file" ]] || return 1
 
@@ -328,6 +382,7 @@ collect_prefix_keys() {
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     local full_key="${line%%.*}"
+    [[ "$full_key" == "__root__" ]] && continue
     local already=false
     local k
     for k in "${seen_keys[@]+"${seen_keys[@]}"}"; do
@@ -335,13 +390,8 @@ collect_prefix_keys() {
     done
     $already && continue
     seen_keys+=("$full_key")
-    local type desc
-    type=$(get_field "$data" "$full_key" "type")
-    desc=$(get_field "$data" "$full_key" "description")
-    desc=$(strip_quotes "$desc")
     _KEY_COL+=("$full_key")
-    _TYPE_COL+=("($type)")
-    _DESC_COL+=("$desc")
+    _DESC_COL+=("$(key_display_right "$data" "$full_key")")
     SEL_TYPES+=("key")
     SEL_VALUES+=("$full_key")
   done <<< "$data"
@@ -358,7 +408,7 @@ run_interactive() {
       collect_top_level
     else
       collect_prefix_keys "$prefix" || {
-        echo "Error: prefix '$prefix' の設定ファイルが見つかりません" >&2
+        echo "Error: プロジェクト '$prefix' の設定ファイルが見つかりません" >&2
         return 1
       }
     fi
@@ -376,7 +426,15 @@ run_interactive() {
     if [[ -z "$prefix" ]]; then
       title="利用可能なキーを選択してください:"
     else
-      title="[$prefix] キーを選択してください:"
+      local pdata pname
+      pdata=$(parse_yaml "$SETTINGS_DIR/${prefix}-setting.yaml")
+      pname=$(get_root_field "$pdata" "name")
+      pname=$(strip_quotes "$pname")
+      if [[ -n "$pname" ]]; then
+        title="[$prefix] $pname のキーを選択してください:"
+      else
+        title="[$prefix] キーを選択してください:"
+      fi
     fi
 
     local items_copy=("${SEL_ITEMS[@]}")
@@ -419,10 +477,10 @@ run_interactive() {
 usage() {
   echo "urirun $VERSION - YAML設定に基づくランチャー" >&2
   echo "" >&2
-  echo "Usage: urirun <key>              setting.yaml のキーを実行" >&2
-  echo "       urirun <prefix>-<key>     settings/<prefix>-setting.yaml のキーを実行" >&2
-  echo "       urirun --list [prefix]    利用可能なキー一覧 (prefix指定で絞り込み)" >&2
-  echo "       urirun --edit [prefix]    設定ファイルを編集" >&2
+  echo "Usage: urirun <key>                   setting.yaml のキーを実行" >&2
+  echo "       urirun <プロジェクト>-<key>    settings/<プロジェクト>-setting.yaml のキーを実行" >&2
+  echo "       urirun --list [プロジェクト]   利用可能なキー一覧 (プロジェクト指定で絞り込み)" >&2
+  echo "       urirun --edit [プロジェクト]   設定ファイルを編集" >&2
   echo "       urirun --shell-init" >&2
   echo "       urirun --version" >&2
   echo "" >&2
@@ -460,12 +518,16 @@ case "$1" in
       cat > "$local_target" << 'TMPL'
 # urirun 設定ファイル
 # 対応type: chrome, zed, vscode, ssh, command
-#
-# example:
-#   github:
-#     type: chrome
-#     profile: user@example.com
-#     url: https://github.com
+
+name: Personal
+description: 個人用設定
+keys:
+  # example:
+  #   github:
+  #     type: chrome
+  #     profile: user@example.com
+  #     url: https://github.com
+  #     description: GitHub を開く
 TMPL
     fi
     "${EDITOR:-vi}" "$local_target"
