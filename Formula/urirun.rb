@@ -1,10 +1,10 @@
 class Urirun < Formula
   desc "YAML設定に基づいてアプリやサービスをワンコマンドで起動するランチャー"
   homepage "https://github.com/uribow-lab/uribow-run-tool"
-  url "https://github.com/uribow-lab/uribow-run-tool/archive/refs/tags/v1.3.1.tar.gz"
-  sha256 "65b29c7c27363bb290950458fb4838e8d7076f2d462a58c2ab90371ffaf11a68"
+  url "https://github.com/uribow-lab/uribow-run-tool/archive/refs/tags/v1.4.1.tar.gz"
+  sha256 "def35b10db22c903b142a13cb272907886aa079ddc87464104e55281a8eca369"
   license "MIT"
-  version "1.3.1"
+  version "1.4.1"
 
   def install
     bin.install "bin/urirun"
