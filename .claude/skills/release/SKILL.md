@@ -59,16 +59,29 @@ git push origin main
 
 ### 7. tapリポジトリに反映
 
+tapリポジトリ（`uribow-lab/homebrew-tap`）は非公開。remote は SSH（`git@github-uribow:uribow-lab/homebrew-tap.git`）に設定済みなので、SSH で pull / push する。
+
 ```bash
-cp Formula/urirun.rb /usr/local/Homebrew/Library/Taps/uribow-lab/homebrew-tap/Formula/urirun.rb
-cd /usr/local/Homebrew/Library/Taps/uribow-lab/homebrew-tap
-git add Formula/urirun.rb
-git commit -m "Bump urirun to v<VERSION>"
-GH_TOKEN=$(gh auth token) git -c "http.https://github.com/.extraheader=Authorization: basic $(echo -n "x-access-token:$(gh auth token)" | base64)" push origin main
+TAP=/usr/local/Homebrew/Library/Taps/uribow-lab/homebrew-tap
+
+# remote が SSH になっているか確認（https:// なら中断してユーザーに報告）
+git -C "$TAP" remote get-url origin
+
+# 別のMacから反映された分を取り込む（ローカルが遅れていることがある）
+git -C "$TAP" pull --ff-only origin main
+
+cp Formula/urirun.rb "$TAP/Formula/urirun.rb"
+git -C "$TAP" add Formula/urirun.rb
+# tapリポジトリには作成者が未設定のため、urirunリポジトリと同じ作成者をコミット単位で指定する
+git -C "$TAP" -c user.name="$(git config user.name)" -c user.email="$(git config user.email)" \
+  commit -m "Bump urirun to v<VERSION>"
+git -C "$TAP" push origin main
 ```
 
-- tapリポジトリはHomebrewがHTTPSでcloneしており、通常のgit credentialが効かない場合がある
-- `gh auth token` を使ってHTTPS認証を行う
+- remote が `https://` のままだと、非公開リポジトリのため `Repository not found` で失敗する。その場合は勝手に変更せず、以下の実行をユーザーに依頼する:
+  `git -C /usr/local/Homebrew/Library/Taps/uribow-lab/homebrew-tap remote set-url origin git@github-uribow:uribow-lab/homebrew-tap.git`
+- SSH 認証で失敗した場合（`Permission denied (publickey)` 等）は、HTTPS や `gh auth token` に切り替えず、ユーザーに `ssh-add` での鍵の再登録を依頼して中断する
+- `pull --ff-only` が失敗した場合（ローカルに未 push のコミットがある等）は中断してユーザーに報告する
 
 ### 8. 完了報告
 
