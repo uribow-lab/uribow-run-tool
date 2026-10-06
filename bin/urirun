@@ -577,13 +577,37 @@ if [[ -f "$SETTINGS_DIR/${INPUT_KEY}-setting.yaml" ]] && [[ -t 1 ]] && [[ -r /de
   fi
 fi
 
-# キー解決
-RESOLVED=$(resolve_key "$INPUT_KEY") || {
+# 入力からプロジェクトのプレフィックスを推定する (例: "some-xxx" → settings/some-setting.yaml があれば "some")
+guess_prefix() {
+  local arg="$1"
+  while [[ "$arg" == *-* ]]; do
+    arg="${arg%-*}"
+    if [[ -f "$SETTINGS_DIR/${arg}-setting.yaml" ]]; then
+      echo "$arg"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# キー解決 (見つからない場合、端末なら対話選択に切替)
+if ! RESOLVED=$(resolve_key "$INPUT_KEY"); then
   echo "Error: キー '$INPUT_KEY' が見つかりません" >&2
   echo "" >&2
-  list_keys
-  exit 1
-}
+  if [[ -t 1 ]] && [[ -r /dev/tty ]]; then
+    if ! run_interactive "$(guess_prefix "$INPUT_KEY" || true)"; then
+      exit 1
+    fi
+    INPUT_KEY="$INTERACTIVE_KEY"
+    RESOLVED=$(resolve_key "$INPUT_KEY") || {
+      echo "Error: キー '$INPUT_KEY' が見つかりません" >&2
+      exit 1
+    }
+  else
+    list_keys
+    exit 1
+  fi
+fi
 
 RESOLVED_FILE=$(echo "$RESOLVED" | cut -f1)
 KEY=$(echo "$RESOLVED" | cut -f2)
