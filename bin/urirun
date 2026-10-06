@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="1.4.0"
+VERSION="1.4.1"
 CONFIG_DIR="$HOME/.config/uribow-lab/urirun"
 CONFIG_FILE="$CONFIG_DIR/setting.yaml"
 SETTINGS_DIR="$CONFIG_DIR/settings"
